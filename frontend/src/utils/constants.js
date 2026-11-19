@@ -1,0 +1,1 @@
+export const LAST_ORDER_KEY = 'nexus_last_order'

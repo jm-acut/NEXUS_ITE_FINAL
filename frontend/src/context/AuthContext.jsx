@@ -1,60 +1,88 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { authApi } from '../api/endpoints'
-import { TOKEN_KEY } from '../api/client'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { authApi, tokenStore } from "../api/client.js";
+import { cartCache, userCache } from "../utils/cache.js";
 
-const AuthContext = createContext(null)
-const USER_KEY = 'nexus_user'
-
-function readUser() {
-  try {
-    return JSON.parse(localStorage.getItem(USER_KEY))
-  } catch {
-    return null
-  }
-}
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY))
-  const [user, setUser] = useState(readUser)
+    const [user, setUser] = useState(null);
+    // true while we check a saved token on first load
+    const [loading, setLoading] = useState(Boolean(tokenStore.get()));
 
-  const saveSession = useCallback((session) => {
-    localStorage.setItem(TOKEN_KEY, session.token)
-    localStorage.setItem(USER_KEY, JSON.stringify(session.user))
-    setToken(session.token)
-    setUser(session.user)
-  }, [])
+    useEffect(() => {
+        if (!tokenStore.get()) return undefined;
+        let active = true;
 
-  const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
-    setToken(null)
-    setUser(null)
-  }, [])
+        authApi
+            .me()
+            .then((res) => {
+                if (!active) return;
+                setUser(res.data.user);
+                userCache.set(res.data.user);
+            })
+            .catch((err) => {
+                if (!active) return;
+                if (err.status === 401) {
+                    // The server says this session is not valid
+                    tokenStore.clear();
+                    userCache.clear();
+                    cartCache.clear();
+                } else {
+                    // Offline or server down: keep the saved session so cached pages stay viewable
+                    const saved = userCache.get();
+                    if (saved) setUser(saved);
+                }
+            })
+            .finally(() => active && setLoading(false));
 
-  // The API client fires this event on any HTTP 401
-  useEffect(() => {
-    window.addEventListener('auth:unauthorized', logout)
-    return () => window.removeEventListener('auth:unauthorized', logout)
-  }, [logout])
+        return () => {
+            active = false;
+        };
+    }, []);
 
-  const login = useCallback(async (credentials) => {
-    const { data } = await authApi.login(credentials)
-    saveSession(data)
-    return data.user
-  }, [saveSession])
+    useEffect(() => {
+        const onExpired = () => {
+            userCache.clear();
+            cartCache.clear();
+            setUser(null);
+        };
+        window.addEventListener("auth:expired", onExpired);
+        return () => window.removeEventListener("auth:expired", onExpired);
+    }, []);
 
-  const register = useCallback(async (payload) => {
-    const { data } = await authApi.register(payload)
-    saveSession(data)
-    return data.user
-  }, [saveSession])
+    const login = useCallback(async (credentials) => {
+        const res = await authApi.login(credentials);
+        tokenStore.set(res.data.token);
+        userCache.set(res.data.user);
+        setUser(res.data.user);
+        return res.data.user;
+    }, []);
 
-  const value = useMemo(
-    () => ({ token, user, role: user?.role ?? null, isAuthenticated: Boolean(token), login, register, logout }),
-    [token, user, login, register, logout],
-  )
+    const register = useCallback(async (details) => {
+        const res = await authApi.register(details);
+        tokenStore.set(res.data.token);
+        userCache.set(res.data.user);
+        setUser(res.data.user);
+        return res.data.user;
+    }, []);
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    const logout = useCallback(() => {
+        tokenStore.clear();
+        userCache.clear();
+        cartCache.clear();
+        setUser(null);
+    }, []);
+
+    const value = useMemo(
+        () => ({ user, loading, isAdmin: user?.role === "admin", login, register, logout }),
+        [user, loading, login, register, logout]
+    );
+
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export const useAuth = () => useContext(AuthContext)
+export function useAuth() {
+    const context = useContext(AuthContext);
+    if (!context) throw new Error("useAuth must be used inside <AuthProvider>");
+    return context;
+}

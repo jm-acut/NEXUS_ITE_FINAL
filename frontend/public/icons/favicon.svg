@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NEXUS microchip logo">
+  <rect x="18" y="18" width="476" height="476" rx="112" fill="#0b1a3d"/>
+  <g fill="none" stroke="#ffffff" stroke-width="19" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Microchip body -->
+    <rect x="174" y="153" width="164" height="206" rx="17"/>
+    <rect x="204" y="190" width="104" height="132" rx="8"/>
+    <!-- Top pins -->
+    <path d="M207 153v-30 M256 153v-30 M305 153v-30"/>
+    <!-- Bottom pins -->
+    <path d="M207 359v30 M256 359v30 M305 359v30"/>
+    <!-- Left pins -->
+    <path d="M174 190h-28 M174 256h-28 M174 322h-28"/>
+    <!-- Right pins -->
+    <path d="M338 190h28 M338 256h28 M338 322h28"/>
+  </g>
+</svg>

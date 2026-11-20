@@ -1,42 +1,47 @@
-import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt', // Lab Task 4: ReloadPrompt asks before updating
+      registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icons/apple-touch-icon.png'],
       manifest: {
-        name: 'NEXUS Store',
-        short_name: 'NEXUS',
-        description: 'Mobile-first online store with AI-assisted product discovery.',
-        theme_color: '#4f46e5',
-        background_color: '#ffffff',
+        name: 'NEXUS PC',
+        short_name: 'NEXUS PC',
+        description: 'Mobile-first PC parts store with AI-assisted product discovery',
+        theme_color: '#0b1a3d',
+        background_color: '#f3f5fa',
         display: 'standalone',
         orientation: 'portrait',
         start_url: '/',
         scope: '/',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+          {
+            src: '/icons/icon-512-maskable.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
         ],
       },
       workbox: {
-        // App shell is precached automatically (HTML, JS, CSS, icons)
-        navigateFallback: '/index.html',          // deep links work offline
-        navigateFallbackDenylist: [/^\/api/],
-        cleanupOutdatedCaches: true,
+        navigateFallback: '/index.html',
         runtimeCaching: [
           {
-            // GET /api/v1/products and /api/v1/products/:id
-            urlPattern: ({ url }) => url.pathname.startsWith('/api/v1/products'),
-            handler: 'NetworkFirst', // fresh stock/prices online, cached copy offline
+            urlPattern: ({ url, request }) =>
+              request.method === 'GET' &&
+              (url.pathname.startsWith('/api/v1/products') ||
+                url.pathname.startsWith('/api/v1/categories')),
+            handler: 'NetworkFirst',
             options: {
-              cacheName: 'api-cache',
+              cacheName: 'products-api',
               networkTimeoutSeconds: 4,
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 },
+              expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
@@ -44,14 +49,12 @@ export default defineConfig({
             urlPattern: ({ request }) => request.destination === 'image',
             handler: 'CacheFirst',
             options: {
-              cacheName: 'image-cache',
+              cacheName: 'product-images',
               expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
         ],
-        // /auth, /checkout, /cart, /orders, /webhooks match NO rule, so they are never cached.
-        // runtimeCaching only handles GET by default, so POST/PATCH/DELETE are never cached.
       },
     }),
   ],

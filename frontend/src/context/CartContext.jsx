@@ -1,100 +1,112 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { cartApi } from '../api/endpoints'
-import { isCancel } from '../api/client'
-import { useAuth } from './AuthContext'
-import { useNetwork } from './NetworkStatusContext'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { cartApi } from "../api/client.js";
+import { cartCache } from "../utils/cache.js";
+import { useAuth } from "./AuthContext.jsx";
+import { useNetworkStatus } from "./NetworkStatusContext.jsx";
 
-const CartContext = createContext(null)
-const CACHE_KEY = 'nexus_cart_cache'
-const EMPTY = { items: [], subtotal: 0, discount: 0, total: 0 }
+const EMPTY_CART = { items: [], itemCount: 0, subtotalCents: 0, hasIssues: false };
 
-// ASSUMPTION: item = { productId, name, price, imageUrl, quantity }
-const normalize = (d) => ({
-  items: d?.items ?? [],
-  subtotal: d?.subtotal ?? 0,
-  discount: d?.discount ?? 0,
-  total: d?.total ?? 0,
-})
+const CartContext = createContext(null);
 
-function readCache() {
-  try {
-    return JSON.parse(localStorage.getItem(CACHE_KEY)) ?? EMPTY
-  } catch {
-    return EMPTY
-  }
-}
+const readSaved = (userId) => {
+    const saved = cartCache.get();
+    return saved?.userId === userId ? saved.cart : null;
+};
 
 export function CartProvider({ children }) {
-  const { isAuthenticated } = useAuth()
-  const { isOnline } = useNetwork()
-  const [cart, setCart] = useState(readCache) // localStorage = untrusted cache only
-  const [loading, setLoading] = useState(false)
+    const { user } = useAuth();
+    const { online } = useNetworkStatus();
+    const userId = user?.id;
 
-  // Sync with the server (the source of truth) when logged in and online
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setCart(EMPTY)
-      return
-    }
-    if (!isOnline) return
-    const controller = new AbortController()
-    setLoading(true)
-    cartApi
-      .get(controller.signal)
-      .then(({ data }) => setCart(normalize(data)))
-      .catch((e) => {
-        if (!isCancel(e)) return // keep showing the cached cart on failure
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [isAuthenticated, isOnline])
+    const [cart, setCart] = useState(EMPTY_CART);
+    const [loading, setLoading] = useState(false);
+    // true when the cart on screen is the saved copy, not a fresh server answer
+    const [stale, setStale] = useState(false);
 
-  // Mirror to localStorage so the cart can be viewed offline
-  useEffect(() => {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(cart))
-  }, [cart])
+    // Load the cart from the server whenever the signed-in user changes.
+    useEffect(() => {
+        if (!userId) {
+            setCart(EMPTY_CART);
+            setStale(false);
+            return undefined;
+        }
+        let active = true;
+        setLoading(true);
 
-  // Optimistic update, then replace with the server's authoritative cart (rollback on error)
-  const mutate = async (optimistic, request) => {
-    const previous = cart
-    if (optimistic) setCart(optimistic)
-    try {
-      const { data } = await request()
-      setCart(normalize(data))
-    } catch (err) {
-      setCart(previous)
-      throw err
-    }
-  }
+        cartApi
+            .get()
+            .then((res) => {
+                if (!active) return;
+                setCart(res.data);
+                setStale(false);
+                cartCache.set({ userId, cart: res.data });
+            })
+            .catch(() => {
+                if (!active) return;
+                const saved = readSaved(userId);
+                if (saved) {
+                    setCart(saved);
+                    setStale(true);
+                }
+            })
+            .finally(() => active && setLoading(false));
 
-  const addItem = (product, quantity = 1) => mutate(null, () => cartApi.add(product.id, quantity))
+        return () => {
+            active = false;
+        };
+    }, [userId]);
 
-  const updateQuantity = (productId, quantity) =>
-    mutate(
-      (c) => ({ ...c, items: c.items.map((i) => (i.productId === productId ? { ...i, quantity } : i)) }),
-      () => cartApi.update(productId, quantity),
-    )
+    // Back online while showing the saved copy: fetch the real cart.
+    useEffect(() => {
+        if (!online || !stale || !userId) return undefined;
+        let active = true;
 
-  const removeItem = (productId) =>
-    mutate(
-      (c) => ({ ...c, items: c.items.filter((i) => i.productId !== productId) }),
-      () => cartApi.remove(productId),
-    )
+        cartApi
+            .get()
+            .then((res) => {
+                if (!active) return;
+                setCart(res.data);
+                setStale(false);
+                cartCache.set({ userId, cart: res.data });
+            })
+            .catch(() => {});
 
-  const refresh = useCallback(async () => {
-    const { data } = await cartApi.get()
-    setCart(normalize(data))
-  }, [])
+        return () => {
+            active = false;
+        };
+    }, [online, stale, userId]);
 
-  const itemCount = cart.items.reduce((n, i) => n + i.quantity, 0)
+    // Every action returns the full updated cart from the server, so the screen matches the database.
+    const run = useCallback(
+        async (request) => {
+            const res = await request();
+            setCart(res.data);
+            setStale(false);
+            if (userId) cartCache.set({ userId, cart: res.data });
+            return res.data;
+        },
+        [userId]
+    );
 
-  return (
-    <CartContext.Provider value={{ cart, loading, itemCount, addItem, updateQuantity, removeItem, refresh }}>
-      {children}
-    </CartContext.Provider>
-  )
+    const value = useMemo(
+        () => ({
+            cart,
+            loading,
+            stale,
+            refresh: () => run(() => cartApi.get()),
+            addItem: (productId, quantity = 1) => run(() => cartApi.add({ productId, quantity })),
+            setQuantity: (productId, quantity) => run(() => cartApi.setQuantity(productId, quantity)),
+            removeItem: (productId) => run(() => cartApi.remove(productId)),
+            clearCart: () => run(() => cartApi.clear())
+        }),
+        [cart, loading, stale, run]
+    );
+
+    return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
 
-export const useCart = () => useContext(CartContext)
+export function useCart() {
+    const context = useContext(CartContext);
+    if (!context) throw new Error("useCart must be used inside <CartProvider>");
+    return context;
+}
